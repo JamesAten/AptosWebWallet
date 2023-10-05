@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { AptosClient, AptosAccount, CoinClient, FaucetClient, HexString } from "aptos";
 import {Connection, PublicKey, clusterApiUrl, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } from '@solana/web3.js';
 import * as buffer from "buffer";
 import bs58 from 'bs58';
 import TransactionsList from './TransactionsList';
+
+const NODE_URL = "https://fullnode.devnet.aptoslabs.com";
+const FAUCET_URL = "https://faucet.devnet.aptoslabs.com";
 
 window.Buffer = buffer.Buffer;
 function ManageAccount() {
@@ -19,39 +23,24 @@ function ManageAccount() {
 
     function createAccount() {
 
-        const generatedAccount = Keypair.generate();
+        const account = new AptosAccount()
+        console.log('account: ', account);
+        console.log('privateKey: ', account.toPrivateKeyObject().privateKeyHex);
 
-        console.log('generatedAccount: ', generatedAccount);
-
-        const publicKey = generatedAccount.publicKey.toString();
-        console.log('publicKey: ', publicKey);
-
-        setAccount({
-            ...generatedAccount
-        })
+        setAccount(account)
     }
 
     function recoverAccount(secret) {
-        // console.log('submitted Secret Key: ', secret);
+
+        console.log('secret: ', secret);
 
         const secretToUint8Array = hexToUint8Array(secret);
         console.log('secretToUint8Array: ', secretToUint8Array);
 
-        const seed = secretToUint8Array.slice(0, 32);
+        const account = new AptosAccount(secretToUint8Array)
+        console.log('new account: ', account);
 
-        const recoveredAccount = Keypair.fromSeed(seed);
-        console.log('recoveredAccount: ', recoveredAccount);
-
-        const publicKey = recoveredAccount.publicKey.toString();
-        console.log('recoveredAccount.publicKey: ', publicKey);
-
-        console.log('accountBefore: ', account )
-
-        setAccount({
-            ...recoveredAccount
-        })
-
-        console.log('accountAfter: ', account)
+        setAccount(account)
     }
 
     function toggleRecoverAccount () {
@@ -70,50 +59,38 @@ function ManageAccount() {
         recoverAccount(recoveryInput);
     }
 
-    function hexToUint8Array(hexString) {
-        return new Uint8Array(hexString.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-    }
+    function hexToUint8Array(hex) {
+        // Strip the "0x" prefix if it exists
+        const cleanedHex = hex.startsWith("0x") ? hex.substring(2) : hex;
 
-    function Uint8ArraySecretKeyToHex(uint8Array) {
-        const hexString = Buffer.from(uint8Array).toString('hex');
-        return hexString;
-    }
+        // Convert the cleaned hex string to a Uint8Array
+        const uint8Array = new Uint8Array(cleanedHex.length / 2);
 
-    function Uint8ArrayPublicKeyToString(uint8Array) {
-        const publicKeyArray = Array.from(uint8Array);
-        const publicKeyString = bs58.encode(Uint8Array.from(publicKeyArray));
-        return publicKeyString;
+        for (let i = 0; i < cleanedHex.length; i += 2) {
+            uint8Array[i / 2] = parseInt(cleanedHex.substring(i, i + 2), 16);
+        }
+
+        return uint8Array;
+
     }
 
     const getBalance = async () => {
 
-        const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
-        // console.log('connection: ', connection)
+        const client = new AptosClient(NODE_URL);
+        const faucetClient = new FaucetClient(NODE_URL, FAUCET_URL);
+        const coinClient = new CoinClient(client);
 
-        const publicKeyInstance = new PublicKey(account._keypair.publicKey);
-        // console.log('publicKeyInstance: ', publicKeyInstance);
+        const balance = await coinClient.checkBalance(account)
 
-
-        const balance = await connection.getBalance(publicKeyInstance);
-        // console.log('balance: ', balance);
-
-        setBalance(()=> balance / LAMPORTS_PER_SOL);
+        setBalance(()=> balance.toString());
     }
 
-    const airdropSol = async () => {
+    const airdropAPT = async () => {
+        const client = new AptosClient(NODE_URL);
+        const faucetClient = new FaucetClient(NODE_URL, FAUCET_URL);
+        const coinClient = new CoinClient(client);
 
-        const connection = new Connection(clusterApiUrl('devnet'), 'confirmed')
-        // console.log('connection: ', connection)
-
-        const publicKeyInstance = new PublicKey(account._keypair.publicKey);
-        // console.log('publicKeyInstance: ', publicKeyInstance);
-
-        const fromAirdropSignature = await connection.requestAirdrop(publicKeyInstance, 1 * LAMPORTS_PER_SOL);
-
-        await connection.confirmTransaction(fromAirdropSignature);
-
-        getBalance();
-
+        await faucetClient.fundAccount(account.address(), 100_000_000);
     }
 
     const handleRecipientAddressChange = (e) => {
@@ -124,54 +101,22 @@ function ManageAccount() {
         setAmount(e.target.value);
     };
 
-    const handleSendSolana = async () => {
-        const fromPubKey = new PublicKey(Uint8ArrayPublicKeyToString(account._keypair.publicKey));
-        console.log('fromPubKey: ', fromPubKey);
+    function formatAsMoney(str) {
+        const numberValue = parseFloat(str);
+        return new Intl.NumberFormat().format(numberValue);
+    }
 
-        const fromPrivateKey = Keypair.fromSecretKey(account._keypair.secretKey);
+    const handleSendAPT = async () => {
+        const client = new AptosClient(NODE_URL);
+        const coinClient = new CoinClient(client)
 
-        const tx = new Transaction().add(SystemProgram.transfer({
-            fromPubkey: fromPubKey,
-            /** Account that will receive transferred lamports */
-            toPubkey: new PublicKey(recipientAddress),
-            /** Amount of lamports to transfer */
-            lamports: amount * LAMPORTS_PER_SOL,
-        }));
+        const txnHash = await coinClient.transfer(account, recipientAddress, amount, { gasUnitPrice: BigInt(100) });
+        await client.waitForTransaction(txnHash, { checkSuccess: true }); // <:!:section_6b
 
-        const connection = new Connection(clusterApiUrl("devnet"), 'confirmed');
-
-        const blockHash = (await connection.getLatestBlockhash('finalized')).blockhash;
-
-        tx.feePayer = fromPubKey;
-
-        tx.recentBlockhash = blockHash;
-
-        const serializedTransaction = tx.serialize({ requireAllSignatures: false, verifySignatures: true });
-
-        const transactionBase64 = serializedTransaction.toString('base64');
-
-        const feePayer = fromPrivateKey;
-
-        const recoveredTransaction = Transaction.from(Buffer.from(transactionBase64, 'base64'));
-
-        recoveredTransaction.partialSign(feePayer);
-
-        const txnSignature = await connection.sendRawTransaction(
-            recoveredTransaction.serialize(),
-        );
-
-        return txnSignature;
     }
 
     useEffect(() => {
-        if(account !== null){
-            getBalance();
-        }
-        if(account){
-            console.log('useEffectAccount: ', account.publicKey);
-        }
-
-
+        setBalance(0);
     }, [account])
 
     return (
@@ -188,6 +133,7 @@ function ManageAccount() {
                         <input
                             type={'text'}
                             placeholder={'Enter Secret Key'}
+                            placeholder={'Enter Secret Key'}
                             value={recoveryInput}
                             onChange={handleRecoveryInputChange}
                         />
@@ -201,7 +147,7 @@ function ManageAccount() {
 
             <h2>Account</h2>
             <div>
-                {account !== null ? <p>Public Key: {Uint8ArrayPublicKeyToString(account._keypair.publicKey)}</p> : null}
+                {account !== null ? <p>Public Key: {account.accountAddress.toString()}</p> : null}
             </div>
 
             {
@@ -215,22 +161,22 @@ function ManageAccount() {
                 </button>
             }
 
-            {showSecretKey && account !== null && <p>Secret Key: {Uint8ArraySecretKeyToHex(account._keypair.secretKey)}</p>}
+            {showSecretKey && account !== null && <p>Secret Key: {account.toPrivateKeyObject().privateKeyHex}</p>}
+
+            <div className='airdrop-div'>
+                <button className="btn btn-info rounded-pill px-3" onClick={airdropAPT}>Airdrop APT</button>
+            </div>
 
             <div className='account-balance-div'>
                 <button className="btn btn-info rounded-pill px-3" onClick={getBalance}>Get Balance</button>
-                <p>Balance: {balance}</p>
-            </div>
-
-            <div className='airdrop-div'>
-                <button className="btn btn-info rounded-pill px-3" onClick={airdropSol}>Airdrop SOL</button>
+                <p>Balance: {formatAsMoney(balance)}</p>
             </div>
 
             <hr>
             </hr>
 
-            <div className={'send-sol-div'}>
-                <h2>Send SOL</h2>
+            <div className={'send-apt-div'}>
+                <h2>Send APT</h2>
                 <div>
                     <label>Recipient Address: </label>
                     <input type="text" value={recipientAddress} onChange={handleRecipientAddressChange} />
@@ -239,13 +185,13 @@ function ManageAccount() {
                     <label>Amount: </label>
                     <input type="number" value={amount} onChange={handleAmountChange} />
                 </div>
-                <button className="btn btn-primary rounded-pill px-3" onClick={handleSendSolana}>Send SOL</button>
+                <button className="btn btn-primary rounded-pill px-3" onClick={handleSendAPT}>Send APT</button>
             </div>
 
             <hr>
             </hr>
 
-            {account !== null && <TransactionsList account={account} />}
+            {/*{account !== null && <TransactionsList account={account} />}*/}
 
         </div>
     )
