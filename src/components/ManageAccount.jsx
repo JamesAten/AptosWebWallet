@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AptosClient, AptosAccount, CoinClient, FaucetClient, HexString } from "aptos";
-import {Connection, PublicKey, clusterApiUrl, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } from '@solana/web3.js';
 import * as buffer from "buffer";
-import bs58 from 'bs58';
-import TransactionsList from './TransactionsList';
 
 const NODE_URL = "https://fullnode.devnet.aptoslabs.com";
 const FAUCET_URL = "https://faucet.devnet.aptoslabs.com";
@@ -175,7 +172,7 @@ function ManageAccount() {
             <hr>
             </hr>
 
-            <div className={'send-apt-div'}>
+            <div className={'send-apt-div sendDiv'}>
                 <h2>Send APT</h2>
                 <div>
                     <label>Recipient Address: </label>
@@ -190,8 +187,6 @@ function ManageAccount() {
 
             <hr>
             </hr>
-
-            {/*{account !== null && <TransactionsList account={account} />}*/}
 
         </div>
     )
